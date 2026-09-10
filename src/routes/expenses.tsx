@@ -4,12 +4,16 @@ import { Wallet } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { Empty } from "@/components/empty";
+import { ErrorState } from "@/components/error-state";
 import { ShopPills } from "@/components/shop-pills";
 import { Button } from "@/components/ui/button";
 import { Field, Input, NativeSelect } from "@/components/ui/input";
 import { EXPENSE_CATEGORIES } from "@/lib/constants";
 import { createExpense, deleteExpense, getShops, listExpenses } from "@/lib/server/ledger";
 import { useShopFilter } from "@/lib/shop-store";
+import { useUiState } from "@/lib/ui-store";
 import { formatNaira, todayIso } from "@/lib/utils";
 
 export const Route = createFileRoute("/expenses")({
@@ -24,16 +28,18 @@ function ExpensesPage() {
   const shopId = useShopFilter((s) => s.shopId);
   const qc = useQueryClient();
   const shops = useQuery({ queryKey: ["shops"], queryFn: () => getShops() });
-  const { data, isPending } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["expenses", shopId],
     queryFn: () => listExpenses({ data: { shopId } }),
   });
+  const online = useUiState((s) => s.online);
   const [open, setOpen] = useState(false);
-  const [category, setCategory] = useState(EXPENSE_CATEGORIES[0]);
+  const [category, setCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
   const [amount, setAmount] = useState("");
   const [spentAt, setSpentAt] = useState(todayIso());
   const [notes, setNotes] = useState("");
   const [expShop, setExpShop] = useState(shopId ?? "");
+  const [removing, setRemoving] = useState<string | null>(null);
 
   const mut = useMutation({
     mutationFn: () =>
@@ -47,7 +53,9 @@ function ExpensesPage() {
         },
       }),
     onSuccess: async () => {
-      await qc.invalidateQueries();
+      await qc.invalidateQueries({ queryKey: ["expenses"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+      await qc.invalidateQueries({ queryKey: ["report"] });
       toast.success("Expense saved");
       setAmount("");
       setNotes("");
@@ -58,7 +66,17 @@ function ExpensesPage() {
 
   const del = useMutation({
     mutationFn: (id: string) => deleteExpense({ data: { id } }),
-    onSuccess: () => qc.invalidateQueries(),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["expenses"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+      await qc.invalidateQueries({ queryKey: ["report"] });
+      setRemoving(null);
+      toast.success("Expense removed");
+    },
+    onError: (e: Error) => {
+      setRemoving(null);
+      toast.error(e.message);
+    },
   });
 
   const total = (data ?? []).reduce((a, e) => a + e.amount, 0);
@@ -123,7 +141,14 @@ function ExpensesPage() {
         </form>
       ) : null}
 
-      {isPending ? (
+      {isError ? (
+        <ErrorState
+          title="Could not load your expenses"
+          message={error instanceof Error ? error.message : null}
+          offline={!online}
+          onRetry={() => void refetch()}
+        />
+      ) : isPending ? (
         <div className="h-40 animate-pulse rounded-3xl bg-paper" />
       ) : !data?.length ? (
         <Empty
@@ -150,8 +175,8 @@ function ExpensesPage() {
                 <span className="money text-lg">{formatNaira(e.amount)}</span>
                 <button
                   type="button"
-                  className="text-xs font-semibold text-muted"
-                  onClick={() => del.mutate(e.id)}
+                  className="min-h-11 px-2 text-xs font-semibold text-muted"
+                  onClick={() => setRemoving(e.id)}
                 >
                   Remove
                 </button>
@@ -160,6 +185,22 @@ function ExpensesPage() {
           ))}
         </ul>
       )}
+
+      <ConfirmDialog
+        open={removing !== null}
+        onOpenChange={(open) => !open && setRemoving(null)}
+        title="Remove this expense?"
+        description={
+          removing
+            ? `${(data ?? []).find((e) => e.id === removing)?.category ?? "This expense"} of ${formatNaira(
+                (data ?? []).find((e) => e.id === removing)?.amount ?? 0,
+              )} will be deleted. This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Yes, remove it"
+        busy={del.isPending}
+        onConfirm={() => removing && del.mutate(removing)}
+      />
     </div>
   );
 }

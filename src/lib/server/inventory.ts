@@ -4,6 +4,7 @@ import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
 import type { Bale, Cloth } from "@/lib/types";
 import { nid, num } from "@/lib/utils";
+import { photoSrc } from "./photos";
 import { ensureWorkspace } from "./workspace";
 
 const ShopFilter = z.object({ shopId: z.string().nullable() });
@@ -72,7 +73,7 @@ function mapCloth(r: ClothRow): Cloth {
     sellingPrice: num(r.selling_price),
     cost: num(r.cost),
     status: r.status,
-    photo: r.photo,
+    photo: photoSrc(r.id, r.photo),
     createdAt: r.created_at,
     soldAt: r.sold_at,
   };
@@ -88,20 +89,20 @@ export const listBales = createServerFn({ method: "POST" })
       ? await sql<BaleRow>`
           select b.id, b.shop_id, sh.name as shop_name, b.name, b.purchased_at, b.purchase_price,
             b.pieces, b.notes, b.photo,
-            (select count(*)::int from clothes c where c.bale_id = b.id) as recorded,
-            (select count(*)::int from clothes c where c.bale_id = b.id and c.status = 'sold') as sold,
-            (select count(*)::int from clothes c where c.bale_id = b.id and c.status = 'available') as available
-          from bales b join shops sh on sh.id = b.shop_id
+            (select count(*)::int from clothes c where c.bale_id = b.id and c.user_id = b.user_id) as recorded,
+            (select count(*)::int from clothes c where c.bale_id = b.id and c.user_id = b.user_id and c.status = 'sold') as sold,
+            (select count(*)::int from clothes c where c.bale_id = b.id and c.user_id = b.user_id and c.status = 'available') as available
+          from bales b join shops sh on sh.id = b.shop_id and sh.user_id = b.user_id
           where b.user_id = ${context.userId} and b.shop_id = ${data.shopId}
           order by b.purchased_at desc, b.created_at desc
         `
       : await sql<BaleRow>`
           select b.id, b.shop_id, sh.name as shop_name, b.name, b.purchased_at, b.purchase_price,
             b.pieces, b.notes, b.photo,
-            (select count(*)::int from clothes c where c.bale_id = b.id) as recorded,
-            (select count(*)::int from clothes c where c.bale_id = b.id and c.status = 'sold') as sold,
-            (select count(*)::int from clothes c where c.bale_id = b.id and c.status = 'available') as available
-          from bales b join shops sh on sh.id = b.shop_id
+            (select count(*)::int from clothes c where c.bale_id = b.id and c.user_id = b.user_id) as recorded,
+            (select count(*)::int from clothes c where c.bale_id = b.id and c.user_id = b.user_id and c.status = 'sold') as sold,
+            (select count(*)::int from clothes c where c.bale_id = b.id and c.user_id = b.user_id and c.status = 'available') as available
+          from bales b join shops sh on sh.id = b.shop_id and sh.user_id = b.user_id
           where b.user_id = ${context.userId}
           order by b.purchased_at desc, b.created_at desc
         `;
@@ -117,10 +118,10 @@ export const getBale = createServerFn({ method: "POST" })
     const rows = await sql<BaleRow>`
       select b.id, b.shop_id, sh.name as shop_name, b.name, b.purchased_at, b.purchase_price,
         b.pieces, b.notes, b.photo,
-        (select count(*)::int from clothes c where c.bale_id = b.id) as recorded,
-        (select count(*)::int from clothes c where c.bale_id = b.id and c.status = 'sold') as sold,
-        (select count(*)::int from clothes c where c.bale_id = b.id and c.status = 'available') as available
-      from bales b join shops sh on sh.id = b.shop_id
+        (select count(*)::int from clothes c where c.bale_id = b.id and c.user_id = b.user_id) as recorded,
+        (select count(*)::int from clothes c where c.bale_id = b.id and c.user_id = b.user_id and c.status = 'sold') as sold,
+        (select count(*)::int from clothes c where c.bale_id = b.id and c.user_id = b.user_id and c.status = 'available') as available
+      from bales b join shops sh on sh.id = b.shop_id and sh.user_id = b.user_id
       where b.user_id = ${context.userId} and b.id = ${data.id}
       limit 1
     `;
@@ -131,8 +132,8 @@ export const getBale = createServerFn({ method: "POST" })
         cl.category, cl.description, cl.size, cl.color, cl.selling_price, cl.cost,
         cl.status, cl.photo, cl.created_at::text as created_at, cl.sold_at
       from clothes cl
-      join shops sh on sh.id = cl.shop_id
-      left join bales b on b.id = cl.bale_id
+      join shops sh on sh.id = cl.shop_id and sh.user_id = cl.user_id
+      left join bales b on b.id = cl.bale_id and b.user_id = cl.user_id
       where cl.user_id = ${context.userId} and cl.bale_id = ${data.id}
       order by cl.created_at desc
     `;
@@ -188,8 +189,8 @@ export const listClothes = createServerFn({ method: "POST" })
         cl.category, cl.description, cl.size, cl.color, cl.selling_price, cl.cost,
         cl.status, cl.photo, cl.created_at::text as created_at, cl.sold_at
       from clothes cl
-      join shops sh on sh.id = cl.shop_id
-      left join bales b on b.id = cl.bale_id
+      join shops sh on sh.id = cl.shop_id and sh.user_id = cl.user_id
+      left join bales b on b.id = cl.bale_id and b.user_id = cl.user_id
       where cl.user_id = ${context.userId}
         and (${data.shopId}::text is null or cl.shop_id = ${data.shopId})
         and (${data.status} = 'all' or cl.status = ${data.status})
@@ -215,8 +216,8 @@ export const getCloth = createServerFn({ method: "POST" })
         cl.category, cl.description, cl.size, cl.color, cl.selling_price, cl.cost,
         cl.status, cl.photo, cl.created_at::text as created_at, cl.sold_at
       from clothes cl
-      join shops sh on sh.id = cl.shop_id
-      left join bales b on b.id = cl.bale_id
+      join shops sh on sh.id = cl.shop_id and sh.user_id = cl.user_id
+      left join bales b on b.id = cl.bale_id and b.user_id = cl.user_id
       where cl.user_id = ${context.userId} and cl.id = ${data.id}
       limit 1
     `;
@@ -288,6 +289,11 @@ export const updateCloth = createServerFn({ method: "POST" })
   )
   .handler(async ({ context, data }) => {
     const sql = await getSql();
+    const editable = await sql<{ id: string }>`
+      select id from clothes
+      where id = ${data.id} and user_id = ${context.userId} and status = 'available'
+    `;
+    if (!editable[0]) throw new Error("That cloth is not in the shop any more");
     await sql`
       update clothes set
         category = ${data.category},
@@ -307,6 +313,11 @@ export const deleteCloth = createServerFn({ method: "POST" })
   .validator(z.object({ id: z.string() }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
+    const removable = await sql<{ id: string }>`
+      select id from clothes
+      where id = ${data.id} and user_id = ${context.userId} and status = 'available'
+    `;
+    if (!removable[0]) throw new Error("That cloth is not in the shop any more");
     await sql`
       delete from clothes
       where id = ${data.id} and user_id = ${context.userId} and status = 'available'

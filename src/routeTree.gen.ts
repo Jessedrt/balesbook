@@ -26,6 +26,7 @@ import { Route as ClothesIdRouteImport } from './routes/clothes/$id'
 import { Route as ClothesNewRouteImport } from './routes/clothes/new'
 import { Route as CustomersIndexRouteImport } from './routes/customers/index'
 import { Route as CustomersIdRouteImport } from './routes/customers/$id'
+import { Route as PhotosIdRouteImport } from './routes/photos/$id'
 import { Route as SalesNewRouteImport } from './routes/sales/new'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
@@ -114,6 +115,11 @@ const CustomersIdRoute = CustomersIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => CustomersRoute,
 } as any)
+const PhotosIdRoute = PhotosIdRouteImport.update({
+  id: '/photos/$id',
+  path: '/photos/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SalesNewRoute = SalesNewRouteImport.update({
   id: '/new',
   path: '/new',
@@ -140,6 +146,7 @@ export interface FileRoutesByFullPath {
   '/clothes/$id': typeof ClothesIdRoute
   '/clothes/new': typeof ClothesNewRoute
   '/customers/$id': typeof CustomersIdRoute
+  '/photos/$id': typeof PhotosIdRoute
   '/sales/new': typeof SalesNewRoute
   '/bales/': typeof BalesIndexRoute
   '/clothes/': typeof ClothesIndexRoute
@@ -158,6 +165,7 @@ export interface FileRoutesByTo {
   '/clothes/$id': typeof ClothesIdRoute
   '/clothes/new': typeof ClothesNewRoute
   '/customers/$id': typeof CustomersIdRoute
+  '/photos/$id': typeof PhotosIdRoute
   '/sales/new': typeof SalesNewRoute
   '/bales': typeof BalesIndexRoute
   '/clothes': typeof ClothesIndexRoute
@@ -180,6 +188,7 @@ export interface FileRoutesById {
   '/clothes/$id': typeof ClothesIdRoute
   '/clothes/new': typeof ClothesNewRoute
   '/customers/$id': typeof CustomersIdRoute
+  '/photos/$id': typeof PhotosIdRoute
   '/sales/new': typeof SalesNewRoute
   '/bales/': typeof BalesIndexRoute
   '/clothes/': typeof ClothesIndexRoute
@@ -203,6 +212,7 @@ export interface FileRouteTypes {
     | '/clothes/$id'
     | '/clothes/new'
     | '/customers/$id'
+    | '/photos/$id'
     | '/sales/new'
     | '/bales/'
     | '/clothes/'
@@ -221,6 +231,7 @@ export interface FileRouteTypes {
     | '/clothes/$id'
     | '/clothes/new'
     | '/customers/$id'
+    | '/photos/$id'
     | '/sales/new'
     | '/bales'
     | '/clothes'
@@ -242,6 +253,7 @@ export interface FileRouteTypes {
     | '/clothes/$id'
     | '/clothes/new'
     | '/customers/$id'
+    | '/photos/$id'
     | '/sales/new'
     | '/bales/'
     | '/clothes/'
@@ -259,6 +271,7 @@ export interface RootRouteChildren {
   MoreRoute: typeof MoreRoute
   ReportsRoute: typeof ReportsRoute
   SalesRoute: typeof SalesRouteWithChildren
+  PhotosIdRoute: typeof PhotosIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -383,6 +396,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CustomersIdRouteImport
       parentRoute: typeof CustomersRoute
     }
+    '/photos/$id': {
+      id: '/photos/$id'
+      path: '/photos/$id'
+      fullPath: '/photos/$id'
+      preLoaderRoute: typeof PhotosIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sales/new': {
       id: '/sales/new'
       path: '/new'
@@ -463,6 +483,7 @@ const rootRouteChildren: RootRouteChildren = {
   MoreRoute: MoreRoute,
   ReportsRoute: ReportsRoute,
   SalesRoute: SalesRouteWithChildren,
+  PhotosIdRoute: PhotosIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport

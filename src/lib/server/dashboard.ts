@@ -2,14 +2,24 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
-import type { DashboardData, SaleRow, ShopStats } from "@/lib/types";
+import type { DashboardData, OwingCustomer, SaleRow, ShopStats } from "@/lib/types";
 import { firstName, num, todayIso } from "@/lib/utils";
+import { photoSrc } from "./photos";
 import { ensureWorkspace } from "./workspace";
 
 const Filter = z.object({
   shopId: z.string().nullable(),
 });
 
+/**
+ * Every join below repeats the owner predicate (`x.user_id = s.user_id`).
+ * The outer `where user_id = ${context.userId}` already isolates the tenant, so
+ * this is defence in depth: no row from another business can ever be pulled in
+ * through an id that happens to collide or a stale foreign key.
+ *
+ * "Today" is the Lagos business day (`todayIso`), not the server's UTC day —
+ * otherwise a 00:30 sale is booked against yesterday.
+ */
 export const getDashboard = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(Filter)
@@ -19,69 +29,64 @@ export const getDashboard = createServerFn({ method: "POST" })
     const shopId = data.shopId;
     const today = todayIso();
 
-    const salesToday = shopId
-      ? await sql<{ n: unknown }>`
-          select coalesce(sum(selling_price), 0) as n from sales
-          where user_id = ${context.userId} and sold_at = ${today} and shop_id = ${shopId}
-        `
-      : await sql<{ n: unknown }>`
-          select coalesce(sum(selling_price), 0) as n from sales
-          where user_id = ${context.userId} and sold_at = ${today}
-        `;
+    // Revenue and cloth cost for today in one pass (LEFT JOIN so a sale whose
+    // clothing row was removed still counts as revenue).
+    const todayRow = await sql<{ n: unknown; cogs: unknown }>`
+      select coalesce(sum(s.selling_price), 0) as n, coalesce(sum(c.cost), 0) as cogs
+      from sales s
+      left join clothes c on c.id = s.clothing_id and c.user_id = s.user_id
+      where s.user_id = ${context.userId} and s.sold_at = ${today}
+        and (${shopId}::text is null or s.shop_id = ${shopId})
+    `;
 
-    const collectedToday = shopId
-      ? await sql<{ n: unknown }>`
-          select coalesce(sum(p.amount), 0) as n
-          from payments p
-          join sales s on s.id = p.sale_id
-          where p.user_id = ${context.userId} and p.paid_at = ${today} and s.shop_id = ${shopId}
-        `
-      : await sql<{ n: unknown }>`
-          select coalesce(sum(amount), 0) as n from payments
-          where user_id = ${context.userId} and paid_at = ${today}
-        `;
+    // Cash actually collected today. With a shop selected, only payments tied to
+    // that shop's sales count — a payment recorded against a person (no sale)
+    // cannot be attributed to one shop.
+    const collectedToday = await sql<{ n: unknown }>`
+      select coalesce(sum(p.amount), 0) as n
+      from payments p
+      left join sales s on s.id = p.sale_id and s.user_id = p.user_id
+      where p.user_id = ${context.userId} and p.paid_at = ${today}
+        and (${shopId}::text is null or s.shop_id = ${shopId})
+    `;
 
-    const expensesToday = shopId
-      ? await sql<{ n: unknown }>`
-          select coalesce(sum(amount), 0) as n from expenses
-          where user_id = ${context.userId} and spent_at = ${today} and shop_id = ${shopId}
-        `
-      : await sql<{ n: unknown }>`
-          select coalesce(sum(amount), 0) as n from expenses
-          where user_id = ${context.userId} and spent_at = ${today}
-        `;
+    const expensesToday = await sql<{ n: unknown }>`
+      select coalesce(sum(amount), 0) as n from expenses
+      where user_id = ${context.userId} and spent_at = ${today}
+        and (${shopId}::text is null or shop_id = ${shopId})
+    `;
 
-    const cogsToday = shopId
-      ? await sql<{ n: unknown }>`
-          select coalesce(sum(c.cost), 0) as n
-          from sales s join clothes c on c.id = s.clothing_id
-          where s.user_id = ${context.userId} and s.sold_at = ${today} and s.shop_id = ${shopId}
-        `
-      : await sql<{ n: unknown }>`
-          select coalesce(sum(c.cost), 0) as n
-          from sales s join clothes c on c.id = s.clothing_id
-          where s.user_id = ${context.userId} and s.sold_at = ${today}
-        `;
+    const available = await sql<{ n: number }>`
+      select count(*)::int as n from clothes
+      where user_id = ${context.userId} and status = 'available'
+        and (${shopId}::text is null or shop_id = ${shopId})
+    `;
 
-    const available = shopId
-      ? await sql<{ n: number }>`
-          select count(*)::int as n from clothes
-          where user_id = ${context.userId} and status = 'available' and shop_id = ${shopId}
-        `
-      : await sql<{ n: number }>`
-          select count(*)::int as n from clothes
-          where user_id = ${context.userId} and status = 'available'
-        `;
-
-    const balances = await sql<{ id: string; name: string; purchases: unknown; paid: unknown }>`
+    // Who owes what. Shop-scoped when a shop is selected, so the number on the
+    // dashboard matches the shop the seller is looking at.
+    const balances = await sql<{
+      id: string;
+      name: string;
+      purchases: unknown;
+      paid: unknown;
+    }>`
       select c.id, c.name,
-        coalesce((select sum(selling_price) from sales where customer_id = c.id and user_id = c.user_id), 0) as purchases,
-        coalesce((select sum(amount) from payments where customer_id = c.id and user_id = c.user_id), 0) as paid
+        coalesce((
+          select sum(s.selling_price) from sales s
+          where s.customer_id = c.id and s.user_id = c.user_id
+            and (${shopId}::text is null or s.shop_id = ${shopId})
+        ), 0) as purchases,
+        coalesce((
+          select sum(p.amount) from payments p
+          left join sales s on s.id = p.sale_id and s.user_id = p.user_id
+          where p.customer_id = c.id and p.user_id = c.user_id
+            and (${shopId}::text is null or s.shop_id = ${shopId})
+        ), 0) as paid
       from customers c
       where c.user_id = ${context.userId}
     `;
 
-    const owing = balances
+    const owing: OwingCustomer[] = balances
       .map((r) => ({
         id: r.id,
         name: r.name,
@@ -90,80 +95,60 @@ export const getDashboard = createServerFn({ method: "POST" })
       .filter((r) => r.outstanding > 0)
       .sort((a, b) => b.outstanding - a.outstanding);
 
-    const shopStats: ShopStats[] = [];
-    for (const shop of shops) {
-      const sSales = await sql<{ n: unknown }>`
-        select coalesce(sum(selling_price), 0) as n from sales
-        where user_id = ${context.userId} and shop_id = ${shop.id}
-      `;
-      const sExp = await sql<{ n: unknown }>`
-        select coalesce(sum(amount), 0) as n from expenses
-        where user_id = ${context.userId} and shop_id = ${shop.id}
-      `;
-      const sCogs = await sql<{ n: unknown }>`
-        select coalesce(sum(c.cost), 0) as n
-        from sales s join clothes c on c.id = s.clothing_id
-        where s.user_id = ${context.userId} and s.shop_id = ${shop.id}
-      `;
-      const salesN = num(sSales[0]?.n);
-      const expN = num(sExp[0]?.n);
-      const cogsN = num(sCogs[0]?.n);
-      shopStats.push({
+    // Shop-by-shop totals: two grouped queries instead of one round trip per
+    // shop per metric (a phone on a slow connection waits for all of them).
+    const shopSalesRows = await sql<{ shop_id: string; n: unknown; cogs: unknown }>`
+      select s.shop_id, coalesce(sum(s.selling_price), 0) as n, coalesce(sum(c.cost), 0) as cogs
+      from sales s
+      left join clothes c on c.id = s.clothing_id and c.user_id = s.user_id
+      where s.user_id = ${context.userId}
+      group by s.shop_id
+    `;
+    const shopExpenseRows = await sql<{ shop_id: string; n: unknown }>`
+      select shop_id, coalesce(sum(amount), 0) as n from expenses
+      where user_id = ${context.userId} and shop_id is not null
+      group by shop_id
+    `;
+    const salesByShop = new Map(shopSalesRows.map((r) => [r.shop_id, r]));
+    const expensesByShop = new Map(shopExpenseRows.map((r) => [r.shop_id, r]));
+
+    const shopStats: ShopStats[] = shops.map((shop) => {
+      const s = salesByShop.get(shop.id);
+      const salesN = num(s?.n);
+      const expN = num(expensesByShop.get(shop.id)?.n);
+      return {
         id: shop.id,
         name: shop.name,
         sales: salesN,
         expenses: expN,
-        profit: salesN - cogsN - expN,
-      });
-    }
+        profit: salesN - num(s?.cogs) - expN,
+      };
+    });
 
-    const recentRows = shopId
-      ? await sql<{
-          id: string;
-          customer_id: string;
-          customer_name: string;
-          shop_id: string;
-          shop_name: string;
-          clothing_id: string;
-          item: string;
-          photo: string | null;
-          selling_price: unknown;
-          sold_at: string;
-          notes: string;
-        }>`
-          select s.id, s.customer_id, cu.name as customer_name, s.shop_id, sh.name as shop_name,
-            s.clothing_id, cl.description as item, cl.photo, s.selling_price, s.sold_at, s.notes
-          from sales s
-          join customers cu on cu.id = s.customer_id
-          join shops sh on sh.id = s.shop_id
-          join clothes cl on cl.id = s.clothing_id
-          where s.user_id = ${context.userId} and s.shop_id = ${shopId}
-          order by s.sold_at desc, s.created_at desc
-          limit 6
-        `
-      : await sql<{
-          id: string;
-          customer_id: string;
-          customer_name: string;
-          shop_id: string;
-          shop_name: string;
-          clothing_id: string;
-          item: string;
-          photo: string | null;
-          selling_price: unknown;
-          sold_at: string;
-          notes: string;
-        }>`
-          select s.id, s.customer_id, cu.name as customer_name, s.shop_id, sh.name as shop_name,
-            s.clothing_id, cl.description as item, cl.photo, s.selling_price, s.sold_at, s.notes
-          from sales s
-          join customers cu on cu.id = s.customer_id
-          join shops sh on sh.id = s.shop_id
-          join clothes cl on cl.id = s.clothing_id
-          where s.user_id = ${context.userId}
-          order by s.sold_at desc, s.created_at desc
-          limit 6
-        `;
+    const recentRows = await sql<{
+      id: string;
+      customer_id: string;
+      customer_name: string;
+      shop_id: string;
+      shop_name: string;
+      clothing_id: string;
+      item: string;
+      photo: string | null;
+      selling_price: unknown;
+      sold_at: string;
+      notes: string;
+    }>`
+      select s.id, s.customer_id, cu.name as customer_name, s.shop_id, sh.name as shop_name,
+        s.clothing_id, cl.description as item, cl.photo, s.selling_price, s.sold_at, s.notes
+      from sales s
+      join customers cu on cu.id = s.customer_id and cu.user_id = s.user_id
+      join shops sh on sh.id = s.shop_id and sh.user_id = s.user_id
+      join clothes cl on cl.id = s.clothing_id and cl.user_id = s.user_id
+      where s.user_id = ${context.userId}
+        and (${shopId}::text is null or s.shop_id = ${shopId})
+      order by s.sold_at desc, s.created_at desc
+      limit 6
+    `;
 
     const recentSales: SaleRow[] = recentRows.map((r) => ({
       id: r.id,
@@ -173,15 +158,15 @@ export const getDashboard = createServerFn({ method: "POST" })
       shopName: r.shop_name,
       clothingId: r.clothing_id,
       item: r.item,
-      photo: r.photo,
+      photo: photoSrc(r.clothing_id, r.photo),
       sellingPrice: num(r.selling_price),
       soldAt: r.sold_at,
       notes: r.notes,
     }));
 
-    const todaySales = num(salesToday[0]?.n);
+    const todaySales = num(todayRow[0]?.n);
     const todayExpenses = num(expensesToday[0]?.n);
-    const todayCogs = num(cogsToday[0]?.n);
+    const todayCogs = num(todayRow[0]?.cogs);
 
     return {
       business,

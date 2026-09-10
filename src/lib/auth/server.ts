@@ -36,6 +36,7 @@ import { getCookie } from "@tanstack/react-start/server";
 import { randomBytes } from "node:crypto";
 import { Pool } from "pg";
 import { ensureDbReady, getPglite } from "../db";
+import { isWorkspacePreview } from "../env.server";
 import { emailAndPasswordEnabled } from "./email-password";
 import { GATE_PROVIDER_ID, gateIdentitySessions } from "./gate-session.server";
 import { GROK_PROVIDERS } from "./providers";
@@ -74,12 +75,20 @@ const env = (key: string): string | undefined => {
 // provisions auth; set it to "false" to force auth off everywhere (dev user).
 const authDisabled = env("VITE_AUTH_ENABLED") === "false";
 
-// Broker federation creds: the deployer injects a per-app client when deployed;
-// otherwise fall back to the shared live-preview client, which the broker accepts
-// for any `*.grok-sandbox.com` callback (see `./preview`).
+// Broker federation creds.
+//
+// The shared live-preview client in `./preview.ts` is used ONLY inside the
+// throwaway sandbox preview (no `GROK_PROJECT_ID`). A deployed BaleBook never
+// falls back to it: those constants sit in a public repository, and silently
+// authenticating production users through a low-privilege preview client is
+// exactly the kind of thing that should be loud, not default. Deployed, the
+// broker providers appear only when `GROK_AUTH_CLIENT_ID` /
+// `GROK_AUTH_CLIENT_SECRET` are provided — otherwise the app runs on local
+// email + password, which is the primary sign-in for the Android app anyway.
 const grokIssuer = env("GROK_AUTH_ISSUER") ?? GROK_ISSUER_DEFAULT;
-const grokClientId = env("GROK_AUTH_CLIENT_ID") ?? PREVIEW_CLIENT_ID;
-const grokClientSecret = env("GROK_AUTH_CLIENT_SECRET") ?? PREVIEW_CLIENT_SECRET;
+const grokClientId = env("GROK_AUTH_CLIENT_ID") ?? (isWorkspacePreview() ? PREVIEW_CLIENT_ID : undefined);
+const grokClientSecret =
+  env("GROK_AUTH_CLIENT_SECRET") ?? (isWorkspacePreview() ? PREVIEW_CLIENT_SECRET : undefined);
 
 /** True when federated sign-in is active (real auth is enforced). */
 export const authConfigured =
@@ -148,6 +157,19 @@ const database = databaseUrl
 /** Session token cookie name — also read by the live-preview popup completion page. */
 export const SESSION_TOKEN_COOKIE = "__Host-grok-auth.session_token";
 
+// A session-signing secret that changes per process is worse than no secret:
+// every serverless instance mints its own, so users are signed out at random and
+// sessions silently fail to validate across cold starts. Fail loudly instead.
+const betterAuthSecret = env("BETTER_AUTH_SECRET") ?? previewAuthSecret();
+if (databaseUrl && !env("BETTER_AUTH_SECRET")) {
+  throw new Error(
+    "[auth] BETTER_AUTH_SECRET is not set. Generate one with " +
+      "`openssl rand -base64 32` and add it to your hosting environment — " +
+      "without it every server instance signs sessions with a different key and " +
+      "users are signed out at random.",
+  );
+}
+
 // Built separately so the `betterAuth({...})` call stays easy to edit without
 // breaking brackets (models often trip on the conditional plugin spread).
 const grokOAuthPlugin = authConfigured
@@ -176,7 +198,7 @@ export const auth = betterAuth({
   baseURL,
   // Deployed apps inject BETTER_AUTH_SECRET. Preview: process-stable secret on
   // globalThis so HMR doesn't invalidate PGLite-backed sessions (see above).
-  secret: env("BETTER_AUTH_SECRET") ?? previewAuthSecret(),
+  secret: betterAuthSecret,
   database,
 
   // CSRF / origin check for credentialed auth POSTs (email sign-up/sign-in, …).
@@ -211,7 +233,21 @@ export const auth = betterAuth({
   session: { cookieCache: { enabled: true, maxAge: 300 } },
 
   // Local email/password — toggled only via `./email-password` (not a plugin).
-  ...(emailAndPasswordEnabled ? { emailAndPassword: { enabled: true } } : {}),
+  ...(emailAndPasswordEnabled
+    ? {
+        emailAndPassword: {
+          enabled: true,
+          minPasswordLength: 8,
+          maxPasswordLength: 128,
+          autoSignIn: true,
+        },
+      }
+    : {}),
+
+  // Google Play requires an app that offers account creation to offer in-app
+  // account deletion too. `deleteMyAccount` (src/lib/server/account.ts) wipes the
+  // business rows first, then calls this endpoint to remove the identity.
+  user: { deleteUser: { enabled: true } },
 
   // `__Host-` prefixed cookies: the browser REFUSES any same-named cookie that
   // carries a `Domain` attribute, so a sibling `*.grok.me` app cannot "toss" a

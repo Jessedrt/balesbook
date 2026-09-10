@@ -10,6 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import { AppShell } from "@/components/app-shell";
+import { ErrorState } from "@/components/error-state";
 import { ShopPills } from "@/components/shop-pills";
 import { getReport, getShops } from "@/lib/server/ledger";
 import { useShopFilter } from "@/lib/shop-store";
@@ -28,7 +29,7 @@ function ReportsPage() {
   const shopId = useShopFilter((s) => s.shopId);
   const [period, setPeriod] = useState<ReportPeriod>("daily");
   const shops = useQuery({ queryKey: ["shops"], queryFn: () => getShops() });
-  const { data, isPending } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["report", period, shopId],
     queryFn: () => getReport({ data: { period, shopId } }),
   });
@@ -57,7 +58,13 @@ function ReportsPage() {
         ))}
       </div>
 
-      {isPending || !data ? (
+      {isError ? (
+        <ErrorState
+          title="Could not build this report"
+          message={error instanceof Error ? error.message : null}
+          onRetry={() => void refetch()}
+        />
+      ) : isPending || !data ? (
         <div className="h-48 animate-pulse rounded-3xl bg-paper" />
       ) : (
         <>

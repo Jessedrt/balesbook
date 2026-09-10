@@ -1,4 +1,5 @@
 import { getSql } from "@/lib/db";
+import { isWorkspacePreview } from "@/lib/env.server";
 import { isoOffset, nid, todayIso } from "@/lib/utils";
 import type { Business, Shop } from "@/lib/types";
 
@@ -35,7 +36,12 @@ export async function ensureWorkspace(userId: string, displayName?: string | nul
       (${shop2}, ${userId}, ${"Shop 2"}, ${2})
   `;
 
-  await seedSample(userId, shop1, shop2);
+  // Demo rows exist ONLY in the throwaway sandbox preview, where a reviewer needs
+  // something on screen. In production a new account starts EMPTY — a seller must
+  // never open their own book and find ₦120,000 of sales that never happened.
+  if (isWorkspacePreview()) {
+    await seedSample(userId, shop1, shop2);
+  }
 
   return {
     business: { id: businessId, name: "Mama's Okrika", ownerName: owner },
