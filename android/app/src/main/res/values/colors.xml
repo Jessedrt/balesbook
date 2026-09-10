@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Overrides Capacitor's stock indigo so system chrome (status bar background on
+  older Android, recent-apps tint, spinner) matches BaleBook.
+  Keep in sync with the @theme block in src/styles.css.
+-->
+<resources>
+    <color name="colorPrimary">#1E5843</color>
+    <color name="colorPrimaryDark">#1E5843</color>
+    <color name="colorAccent">#1E5843</color>
+    <color name="balebookBackground">#F3EBDD</color>
+    <color name="balebookPrimary">#1E5843</color>
+</resources>

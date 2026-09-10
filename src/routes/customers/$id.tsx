@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ClothPhoto } from "@/components/cloth-photo";
+import { ErrorState } from "@/components/error-state";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { getCustomer, recordPayment } from "@/lib/server/ledger";
@@ -14,7 +15,7 @@ export const Route = createFileRoute("/customers/$id")({ component: CustomerDeta
 function CustomerDetail() {
   const { id } = Route.useParams();
   const qc = useQueryClient();
-  const { data, isPending } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["customer", id],
     queryFn: () => getCustomer({ data: { id } }),
   });
@@ -30,14 +31,30 @@ function CustomerDetail() {
           notes: "Payment received",
         },
       }),
-    onSuccess: async () => {
-      await qc.invalidateQueries();
-      toast.success("Payment recorded");
+    onSuccess: async (res) => {
+      await qc.invalidateQueries({ queryKey: ["customer", id] });
+      await qc.invalidateQueries({ queryKey: ["customers"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+      await qc.invalidateQueries({ queryKey: ["report"] });
+      toast.success(
+        res.outstanding > 0
+          ? `Payment recorded. ${formatNaira(res.outstanding)} still owing.`
+          : "Payment recorded. They are settled.",
+      );
       setAmount("");
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
+  if (isError) {
+    return (
+      <ErrorState
+        title="Could not open this person"
+        message={error instanceof Error ? error.message : null}
+        onRetry={() => void refetch()}
+      />
+    );
+  }
   if (isPending) return <div className="h-64 animate-pulse rounded-3xl bg-paper" />;
   if (!data) {
     return (

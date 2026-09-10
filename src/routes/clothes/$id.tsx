@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, ShoppingBag, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { ClothPhoto } from "@/components/cloth-photo";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ErrorState } from "@/components/error-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { deleteCloth, getCloth } from "@/lib/server/inventory";
@@ -14,19 +17,31 @@ function ClothDetail() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { data, isPending } = useQuery({
+  const [confirming, setConfirming] = useState(false);
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["cloth", id],
     queryFn: () => getCloth({ data: { id } }),
   });
   const del = useMutation({
     mutationFn: () => deleteCloth({ data: { id } }),
     onSuccess: async () => {
-      await qc.invalidateQueries();
+      await qc.invalidateQueries({ queryKey: ["clothes"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Removed");
       void navigate({ to: "/clothes" });
     },
+    onError: (e: Error) => toast.error(e.message),
   });
 
+  if (isError) {
+    return (
+      <ErrorState
+        title="Could not open this cloth"
+        message={error instanceof Error ? error.message : null}
+        onRetry={() => void refetch()}
+      />
+    );
+  }
   if (isPending) return <div className="h-80 animate-pulse rounded-3xl bg-paper" />;
   if (!data) {
     return (
@@ -80,12 +95,22 @@ function ClothDetail() {
             type="button"
             variant="ghost"
             className="text-danger"
-            onClick={() => {
-              if (confirm("Remove this cloth from the shop?")) del.mutate();
-            }}
+            onClick={() => setConfirming(true)}
           >
             <Trash2 /> Remove
           </Button>
+          <ConfirmDialog
+            open={confirming}
+            onOpenChange={setConfirming}
+            title="Remove this cloth?"
+            description={`${data.description} will be deleted from your shop. This cannot be undone.`}
+            confirmLabel="Yes, remove it"
+            busy={del.isPending}
+            onConfirm={() => {
+              setConfirming(false);
+              del.mutate();
+            }}
+          />
         </div>
       ) : (
         <p className="text-sm text-muted">

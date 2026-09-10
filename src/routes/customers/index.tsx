@@ -4,9 +4,11 @@ import { Plus, Users } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Empty } from "@/components/empty";
+import { ErrorState } from "@/components/error-state";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { listCustomers, upsertCustomer } from "@/lib/server/ledger";
+import { useUiState } from "@/lib/ui-store";
 import { formatNaira } from "@/lib/utils";
 
 export const Route = createFileRoute("/customers/")({ component: CustomersPage });
@@ -17,10 +19,11 @@ function CustomersPage() {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const { data, isPending } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["customers", owingOnly],
     queryFn: () => listCustomers({ data: { owingOnly } }),
   });
+  const online = useUiState((s) => s.online);
   const mut = useMutation({
     mutationFn: () =>
       upsertCustomer({ data: { id: null, name, phone, notes: "" } }),
@@ -71,7 +74,7 @@ function CustomersPage() {
       <div className="flex items-center justify-between rounded-3xl bg-danger-soft px-4 py-3">
         <div>
           <p className="text-sm font-medium text-danger">Total outstanding</p>
-          <p className="money text-2xl text-danger">{formatNaira(owingOnly ? totalOwing : totalOwing)}</p>
+          <p className="money text-2xl text-danger">{formatNaira(totalOwing)}</p>
         </div>
         <button
           type="button"
@@ -82,7 +85,14 @@ function CustomersPage() {
         </button>
       </div>
 
-      {isPending ? (
+      {isError ? (
+        <ErrorState
+          title="Could not load your people"
+          message={error instanceof Error ? error.message : null}
+          offline={!online}
+          onRetry={() => void refetch()}
+        />
+      ) : isPending ? (
         <div className="h-40 animate-pulse rounded-3xl bg-paper" />
       ) : !data?.length ? (
         <Empty

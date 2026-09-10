@@ -11,7 +11,8 @@ import type {
   SaleRow,
   ShopStats,
 } from "@/lib/types";
-import { isoOffset, nid, num, todayIso } from "@/lib/utils";
+import { formatNaira, isoOffset, monthStartIso, nid, num, todayIso } from "@/lib/utils";
+import { photoSrc } from "./photos";
 import { ensureWorkspace } from "./workspace";
 
 type CustomerRow = {
@@ -87,8 +88,8 @@ export const getCustomer = createServerFn({ method: "POST" })
       select s.id, s.customer_id, ${customer.name} as customer_name, s.shop_id, sh.name as shop_name,
         s.clothing_id, cl.description as item, cl.photo, s.selling_price, s.sold_at, s.notes
       from sales s
-      join shops sh on sh.id = s.shop_id
-      join clothes cl on cl.id = s.clothing_id
+      join shops sh on sh.id = s.shop_id and sh.user_id = s.user_id
+      join clothes cl on cl.id = s.clothing_id and cl.user_id = s.user_id
       where s.user_id = ${context.userId} and s.customer_id = ${data.id}
       order by s.sold_at desc, s.created_at desc
     `;
@@ -115,7 +116,7 @@ export const getCustomer = createServerFn({ method: "POST" })
           shopName: r.shop_name,
           clothingId: r.clothing_id,
           item: r.item,
-          photo: r.photo,
+          photo: photoSrc(r.clothing_id, r.photo),
           sellingPrice: num(r.selling_price),
           soldAt: r.sold_at,
           notes: r.notes,
@@ -235,10 +236,34 @@ export const recordPayment = createServerFn({ method: "POST" })
   )
   .handler(async ({ context, data }) => {
     const sql = await getSql();
-    const owned = await sql<{ id: string }>`
-      select id from customers where id = ${data.customerId} and user_id = ${context.userId}
+    const rows = await sql<{
+      id: string;
+      purchases: unknown;
+      paid: unknown;
+    }>`
+      select c.id,
+        coalesce((select sum(selling_price) from sales s
+          where s.customer_id = c.id and s.user_id = c.user_id), 0) as purchases,
+        coalesce((select sum(amount) from payments p
+          where p.customer_id = c.id and p.user_id = c.user_id), 0) as paid
+      from customers c
+      where c.id = ${data.customerId} and c.user_id = ${context.userId}
+      limit 1
     `;
-    if (!owned[0]) throw new Error("Customer not found");
+    if (!rows[0]) throw new Error("Customer not found");
+
+    const outstanding = Math.max(0, num(rows[0].purchases) - num(rows[0].paid));
+    // An overpayment would be silently swallowed by the `max(0, …)` clamp every
+    // balance uses, so real money would disappear from the books. Reject it with
+    // the number the seller actually needs.
+    if (data.amount > outstanding) {
+      throw new Error(
+        outstanding > 0
+          ? `That is more than they owe — they owe ${formatNaira(outstanding)}.`
+          : "They do not owe anything, so there is no payment to record.",
+      );
+    }
+
     await sql`
       insert into payments (id, user_id, customer_id, amount, paid_at, notes)
       values (
@@ -246,7 +271,7 @@ export const recordPayment = createServerFn({ method: "POST" })
         ${data.paidAt}, ${data.notes.trim()}
       )
     `;
-    return { ok: true };
+    return { ok: true, outstanding: Math.max(0, outstanding - data.amount) };
   });
 
 export const listExpenses = createServerFn({ method: "POST" })
@@ -255,35 +280,22 @@ export const listExpenses = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     await ensureWorkspace(context.userId);
     const sql = await getSql();
-    const rows = data.shopId
-      ? await sql<{
-          id: string;
-          shop_id: string | null;
-          shop_name: string | null;
-          category: string;
-          amount: unknown;
-          spent_at: string;
-          notes: string;
-        }>`
-          select e.id, e.shop_id, sh.name as shop_name, e.category, e.amount, e.spent_at, e.notes
-          from expenses e left join shops sh on sh.id = e.shop_id
-          where e.user_id = ${context.userId} and e.shop_id = ${data.shopId}
-          order by e.spent_at desc, e.created_at desc
-        `
-      : await sql<{
-          id: string;
-          shop_id: string | null;
-          shop_name: string | null;
-          category: string;
-          amount: unknown;
-          spent_at: string;
-          notes: string;
-        }>`
-          select e.id, e.shop_id, sh.name as shop_name, e.category, e.amount, e.spent_at, e.notes
-          from expenses e left join shops sh on sh.id = e.shop_id
-          where e.user_id = ${context.userId}
-          order by e.spent_at desc, e.created_at desc
-        `;
+    const rows = await sql<{
+      id: string;
+      shop_id: string | null;
+      shop_name: string | null;
+      category: string;
+      amount: unknown;
+      spent_at: string;
+      notes: string;
+    }>`
+      select e.id, e.shop_id, sh.name as shop_name, e.category, e.amount, e.spent_at, e.notes
+      from expenses e
+      left join shops sh on sh.id = e.shop_id and sh.user_id = e.user_id
+      where e.user_id = ${context.userId}
+        and (${data.shopId}::text is null or e.shop_id = ${data.shopId})
+      order by e.spent_at desc, e.created_at desc
+    `;
     return rows.map(
       (r): ExpenseRow => ({
         id: r.id,
@@ -380,7 +392,7 @@ export const getReport = createServerFn({ method: "POST" })
     const sql = await getSql();
     const to = todayIso();
     const from =
-      data.period === "daily" ? to : data.period === "weekly" ? isoOffset(-6) : monthStart();
+      data.period === "daily" ? to : data.period === "weekly" ? isoOffset(-6) : monthStartIso();
 
     const sales = data.shopId
       ? await sql<{ n: unknown; items: number }>`
@@ -392,17 +404,12 @@ export const getReport = createServerFn({ method: "POST" })
           select coalesce(sum(selling_price), 0) as n, count(*)::int as items
           from sales where user_id = ${context.userId} and sold_at >= ${from} and sold_at <= ${to}
         `;
-    const collected = data.shopId
-      ? await sql<{ n: unknown }>`
-          select coalesce(sum(p.amount), 0) as n from payments p
-          left join sales s on s.id = p.sale_id
-          where p.user_id = ${context.userId} and p.paid_at >= ${from} and p.paid_at <= ${to}
-            and (${data.shopId}::text is null or s.shop_id = ${data.shopId} or p.sale_id is null)
-        `
-      : await sql<{ n: unknown }>`
-          select coalesce(sum(amount), 0) as n from payments
-          where user_id = ${context.userId} and paid_at >= ${from} and paid_at <= ${to}
-        `;
+    const collected = await sql<{ n: unknown }>`
+      select coalesce(sum(p.amount), 0) as n from payments p
+      left join sales s on s.id = p.sale_id and s.user_id = p.user_id
+      where p.user_id = ${context.userId} and p.paid_at >= ${from} and p.paid_at <= ${to}
+        and (${data.shopId}::text is null or s.shop_id = ${data.shopId})
+    `;
     const expenses = data.shopId
       ? await sql<{ n: unknown }>`
           select coalesce(sum(amount), 0) as n from expenses
@@ -416,20 +423,20 @@ export const getReport = createServerFn({ method: "POST" })
     const cogs = data.shopId
       ? await sql<{ n: unknown }>`
           select coalesce(sum(c.cost), 0) as n from sales s
-          join clothes c on c.id = s.clothing_id
+          join clothes c on c.id = s.clothing_id and c.user_id = s.user_id
           where s.user_id = ${context.userId} and s.sold_at >= ${from} and s.sold_at <= ${to}
             and s.shop_id = ${data.shopId}
         `
       : await sql<{ n: unknown }>`
           select coalesce(sum(c.cost), 0) as n from sales s
-          join clothes c on c.id = s.clothing_id
+          join clothes c on c.id = s.clothing_id and c.user_id = s.user_id
           where s.user_id = ${context.userId} and s.sold_at >= ${from} and s.sold_at <= ${to}
         `;
 
     const cats = data.shopId
       ? await sql<{ category: string; count: number; sales: unknown }>`
           select cl.category, count(*)::int as count, coalesce(sum(s.selling_price), 0) as sales
-          from sales s join clothes cl on cl.id = s.clothing_id
+          from sales s join clothes cl on cl.id = s.clothing_id and cl.user_id = s.user_id
           where s.user_id = ${context.userId} and s.sold_at >= ${from} and s.sold_at <= ${to}
             and s.shop_id = ${data.shopId}
           group by cl.category
@@ -437,7 +444,7 @@ export const getReport = createServerFn({ method: "POST" })
         `
       : await sql<{ category: string; count: number; sales: unknown }>`
           select cl.category, count(*)::int as count, coalesce(sum(s.selling_price), 0) as sales
-          from sales s join clothes cl on cl.id = s.clothing_id
+          from sales s join clothes cl on cl.id = s.clothing_id and cl.user_id = s.user_id
           where s.user_id = ${context.userId} and s.sold_at >= ${from} and s.sold_at <= ${to}
           group by cl.category
           order by count desc, sales desc
@@ -496,7 +503,7 @@ export const getReport = createServerFn({ method: "POST" })
       `;
       const sCogs = await sql<{ n: unknown }>`
         select coalesce(sum(c.cost), 0) as n from sales s
-        join clothes c on c.id = s.clothing_id
+        join clothes c on c.id = s.clothing_id and c.user_id = s.user_id
         where s.user_id = ${context.userId} and s.shop_id = ${shop.id}
           and s.sold_at >= ${from} and s.sold_at <= ${to}
       `;
@@ -511,10 +518,20 @@ export const getReport = createServerFn({ method: "POST" })
       });
     }
 
+    // Total still owed, on the same shop basis as the rest of the report.
     const outstandingRows = await sql<{ purchases: unknown; paid: unknown }>`
       select
-        coalesce((select sum(selling_price) from sales where user_id = ${context.userId}), 0) as purchases,
-        coalesce((select sum(amount) from payments where user_id = ${context.userId}), 0) as paid
+        coalesce((
+          select sum(s.selling_price) from sales s
+          where s.user_id = ${context.userId}
+            and (${data.shopId}::text is null or s.shop_id = ${data.shopId})
+        ), 0) as purchases,
+        coalesce((
+          select sum(p.amount) from payments p
+          left join sales s on s.id = p.sale_id and s.user_id = p.user_id
+          where p.user_id = ${context.userId}
+            and (${data.shopId}::text is null or s.shop_id = ${data.shopId})
+        ), 0) as paid
     `;
 
     const salesN = num(sales[0]?.n);
@@ -544,9 +561,3 @@ export const getReport = createServerFn({ method: "POST" })
     };
   });
 
-function monthStart(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}-01`;
-}

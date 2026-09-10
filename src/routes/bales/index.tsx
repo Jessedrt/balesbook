@@ -2,11 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { Package, Plus } from "lucide-react";
 import { Empty } from "@/components/empty";
+import { ErrorState } from "@/components/error-state";
 import { ShopPills } from "@/components/shop-pills";
 import { Button } from "@/components/ui/button";
 import { listBales } from "@/lib/server/inventory";
 import { getShops } from "@/lib/server/ledger";
 import { useShopFilter } from "@/lib/shop-store";
+import { useUiState } from "@/lib/ui-store";
 import { formatNaira } from "@/lib/utils";
 
 export const Route = createFileRoute("/bales/")({ component: BalesPage });
@@ -14,10 +16,11 @@ export const Route = createFileRoute("/bales/")({ component: BalesPage });
 function BalesPage() {
   const shopId = useShopFilter((s) => s.shopId);
   const shops = useQuery({ queryKey: ["shops"], queryFn: () => getShops() });
-  const { data, isPending } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["bales", shopId],
     queryFn: () => listBales({ data: { shopId } }),
   });
+  const online = useUiState((s) => s.online);
 
   return (
     <div className="flex flex-col gap-5">
@@ -34,7 +37,14 @@ function BalesPage() {
       </div>
       {shops.data ? <ShopPills shops={shops.data.shops} /> : null}
 
-      {isPending ? (
+      {isError ? (
+        <ErrorState
+          title="Could not load your bales"
+          message={error instanceof Error ? error.message : null}
+          offline={!online}
+          onRetry={() => void refetch()}
+        />
+      ) : isPending ? (
         <div className="h-40 animate-pulse rounded-3xl bg-paper" />
       ) : !data?.length ? (
         <Empty

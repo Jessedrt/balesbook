@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ClothPhoto } from "@/components/cloth-photo";
+import { ErrorState } from "@/components/error-state";
 import { Button } from "@/components/ui/button";
 import { Field, Input, NativeSelect } from "@/components/ui/input";
 import { listClothes } from "@/lib/server/inventory";
@@ -33,6 +34,10 @@ function RecordSale() {
     queryKey: ["customers", false],
     queryFn: () => listCustomers({ data: { owingOnly: false } }),
   });
+  // Nothing on this screen can be filled in without the wardrobe list, so a
+  // failed fetch gets a retry rather than an empty dropdown that looks like the
+  // seller has no stock.
+  const clothesFailed = clothes.isError;
 
   const [clothingId, setClothingId] = useState(preselect ?? "");
   const item = useMemo(
@@ -63,7 +68,13 @@ function RecordSale() {
         },
       }),
     onSuccess: async (res) => {
-      await qc.invalidateQueries();
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["clothes"] }),
+        qc.invalidateQueries({ queryKey: ["customers"] }),
+        qc.invalidateQueries({ queryKey: ["dashboard"] }),
+        qc.invalidateQueries({ queryKey: ["report"] }),
+        qc.invalidateQueries({ queryKey: ["bales"] }),
+      ]);
       if (res.outstanding > 0) {
         toast.success(`Sold. ${formatNaira(res.outstanding)} still owing.`);
       } else {
@@ -88,6 +99,14 @@ function RecordSale() {
         </Link>
         <h1 className="font-display text-2xl">Record sale</h1>
       </div>
+
+      {clothesFailed ? (
+        <ErrorState
+          title="Could not load your clothes"
+          message={clothes.error instanceof Error ? clothes.error.message : null}
+          onRetry={() => void clothes.refetch()}
+        />
+      ) : null}
 
       <Field label="Which cloth?">
         <NativeSelect
@@ -200,7 +219,13 @@ function RecordSale() {
         <Row k="Outstanding" v={formatNaira(outstanding)} danger={outstanding > 0} />
       </div>
 
-      <Button type="submit" size="lg" disabled={mut.isPending || !clothingId || (!customerId && !newName.trim())}>
+      <Button
+        type="submit"
+        size="lg"
+        disabled={
+          mut.isPending || clothesFailed || !clothingId || (!customerId && !newName.trim())
+        }
+      >
         {mut.isPending ? "Saving…" : "Save sale"}
       </Button>
     </form>

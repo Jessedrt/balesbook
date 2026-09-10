@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  BaleBook talks to exactly one origin, over TLS, with certificate pinning left
+  to the platform trust store. Cleartext is refused outright: the backend URL is
+  validated as https:// at config-generation time
+  (scripts/write-capacitor-config.mjs) and the session cookie is Secure-only, so
+  an http downgrade would silently break sign-in rather than warn about it.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

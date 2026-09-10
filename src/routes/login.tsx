@@ -9,6 +9,7 @@ import {
   authEnabled,
   signIn,
 } from "@/lib/auth/client";
+import { isNativeApp } from "@/lib/native";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 
 export const Route = createFileRoute("/login")({ component: Login });
@@ -21,6 +22,10 @@ function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Google blocks its sign-in inside embedded WebViews, so the federated buttons
+  // would only produce a "disallowed_useragent" dead end in the Android app.
+  // Email + password is the native sign-in; the website keeps every option.
+  const showFederated = authEnabled && !isNativeApp();
 
   if (isPending) {
     return (
@@ -97,7 +102,14 @@ function Login() {
                   required
                 />
               </Field>
-              {error ? <p className="text-sm font-medium text-danger">{error}</p> : null}
+              {mode === "up" ? (
+                <p className="text-xs text-faint">At least 8 characters.</p>
+              ) : null}
+              {error ? (
+                <p role="alert" className="text-sm font-medium text-danger">
+                  {error}
+                </p>
+              ) : null}
               <Button type="submit" size="lg" disabled={busy}>
                 {busy ? "Please wait…" : mode === "up" ? "Create account" : "Sign in"}
               </Button>
@@ -112,23 +124,27 @@ function Login() {
             >
               {mode === "in" ? "New here? Create an account" : "Already have an account? Sign in"}
             </button>
-            <div className="my-4 flex items-center gap-3 text-xs font-semibold uppercase tracking-wide text-faint">
-              <span className="h-px flex-1 bg-border" />
-              or
-              <span className="h-px flex-1 bg-border" />
-            </div>
-            <div className="flex flex-col gap-2">
-              {GROK_PROVIDERS.map((p) => (
-                <Button
-                  key={p.providerId}
-                  type="button"
-                  variant="outline"
-                  onClick={() => signIn(p.providerId, { callbackURL: "/" })}
-                >
-                  Continue with {p.label}
-                </Button>
-              ))}
-            </div>
+            {showFederated ? (
+              <>
+                <div className="my-4 flex items-center gap-3 text-xs font-semibold uppercase tracking-wide text-faint">
+                  <span className="h-px flex-1 bg-border" />
+                  or
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+                <div className="flex flex-col gap-2">
+                  {GROK_PROVIDERS.map((p) => (
+                    <Button
+                      key={p.providerId}
+                      type="button"
+                      variant="outline"
+                      onClick={() => signIn(p.providerId, { callbackURL: "/" })}
+                    >
+                      Continue with {p.label}
+                    </Button>
+                  ))}
+                </div>
+              </>
+            ) : null}
           </div>
         ) : (
           <p className="text-center text-sm text-muted">Sign-in is disabled.</p>

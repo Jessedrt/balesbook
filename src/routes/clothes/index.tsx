@@ -4,12 +4,15 @@ import { Plus, Shirt } from "lucide-react";
 import { useState } from "react";
 import { ClothPhoto } from "@/components/cloth-photo";
 import { Empty } from "@/components/empty";
+import { ErrorState } from "@/components/error-state";
 import { ShopPills } from "@/components/shop-pills";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getShops } from "@/lib/server/ledger";
 import { listClothes } from "@/lib/server/inventory";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { useUiState } from "@/lib/ui-store";
 import { useShopFilter } from "@/lib/shop-store";
 import { formatNaira } from "@/lib/utils";
 
@@ -19,11 +22,14 @@ function ClothesPage() {
   const shopId = useShopFilter((s) => s.shopId);
   const [status, setStatus] = useState<"all" | "available" | "sold">("available");
   const [search, setSearch] = useState("");
+  // One request per pause in typing, not one per character.
+  const settledSearch = useDebouncedValue(search);
   const shops = useQuery({ queryKey: ["shops"], queryFn: () => getShops() });
-  const { data, isPending } = useQuery({
-    queryKey: ["clothes", shopId, status, search],
-    queryFn: () => listClothes({ data: { shopId, status, search } }),
+  const { data, isPending, isError, error, refetch } = useQuery({
+    queryKey: ["clothes", shopId, status, settledSearch],
+    queryFn: () => listClothes({ data: { shopId, status, search: settledSearch } }),
   });
+  const online = useUiState((s) => s.online);
 
   return (
     <div className="flex flex-col gap-5">
@@ -64,7 +70,14 @@ function ClothesPage() {
         ))}
       </div>
 
-      {isPending ? (
+      {isError ? (
+        <ErrorState
+          title="Could not load your clothes"
+          message={error instanceof Error ? error.message : null}
+          offline={!online}
+          onRetry={() => void refetch()}
+        />
+      ) : isPending ? (
         <div className="grid grid-cols-2 gap-3">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="aspect-[3/4] animate-pulse rounded-3xl bg-paper" />

@@ -20,7 +20,11 @@ export function ClothPhoto({
       <img
         src={photo}
         alt={alt ?? category ?? ""}
-        className={cn("object-cover", className)}
+        // Off-screen thumbnails in a long list never hit the network. Combined
+        // with `/photos/<id>` (cached) this keeps a wardrobe page light.
+        loading="lazy"
+        decoding="async"
+        className={cn("bg-surface-2 object-cover", className)}
       />
     );
   }
@@ -29,6 +33,8 @@ export function ClothPhoto({
     <div
       className={cn("relative grid place-items-center overflow-hidden", className)}
       style={{ background: fill }}
+      role="img"
+      aria-label={alt ?? category ?? "Clothing"}
     >
       <div className="absolute inset-0 bg-ink/25" />
       <Shirt className="relative size-8 text-surface" strokeWidth={1.5} />

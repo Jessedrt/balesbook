@@ -32,7 +32,7 @@ function NewCloth() {
   const search = Route.useSearch();
 
   const [photo, setPhoto] = useState<string | null>(null);
-  const [category, setCategory] = useState(CLOTHING_CATEGORIES[0]);
+  const [category, setCategory] = useState<string>(CLOTHING_CATEGORIES[0]);
   const [description, setDescription] = useState("");
   const [size, setSize] = useState("M");
   const [color, setColor] = useState("Blue");

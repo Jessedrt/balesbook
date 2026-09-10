@@ -8,12 +8,14 @@ import {
   Wallet,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { ErrorState } from "@/components/error-state";
 import { ClothPhoto } from "@/components/cloth-photo";
 import { ShopPills } from "@/components/shop-pills";
 import { getDashboard } from "@/lib/server/dashboard";
 import { useCurrentUser } from "@/lib/auth/use-current-user";
 import { useShopFilter } from "@/lib/shop-store";
-import { firstName, formatNaira, greetingForHour } from "@/lib/utils";
+import { useUiState } from "@/lib/ui-store";
+import { appHour, firstName, formatNaira, greetingForHour } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
   component: () => (
@@ -26,13 +28,24 @@ export const Route = createFileRoute("/")({
 function Dashboard() {
   const user = useCurrentUser();
   const shopId = useShopFilter((s) => s.shopId);
-  const { data, isPending } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["dashboard", shopId],
     queryFn: () => getDashboard({ data: { shopId } }),
   });
+  const online = useUiState((s) => s.online);
 
-  const hour = new Date().getHours();
-  const hello = greetingForHour(hour);
+  const hello = greetingForHour(appHour());
+
+  if (isError) {
+    return (
+      <ErrorState
+        title="Could not load your dashboard"
+        message={error instanceof Error ? error.message : null}
+        offline={!online}
+        onRetry={() => void refetch()}
+      />
+    );
+  }
 
   if (isPending || !data) {
     return (

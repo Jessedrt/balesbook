@@ -10,9 +10,11 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
+import { OfflineBanner } from "@/components/offline-banner";
 import { UserButton } from "@/lib/auth/gates";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { useUiState } from "@/lib/ui-store";
 import { cn } from "@/lib/utils";
 import { BaleMark } from "./mark";
 
@@ -30,9 +32,21 @@ const moreLinks = [
   { to: "/reports", label: "Reports", icon: ChartColumn },
 ];
 
+/**
+ * Safe-area insets come from Capacitor's SystemBars plugin inside the Android
+ * app (it writes `--safe-area-inset-*` on the root element) and from
+ * `viewport-fit=cover` in a browser. The `env()` fallback keeps it correct on
+ * iOS/Android Chrome; the `0px` fallback keeps it flat everywhere else.
+ */
+const insetTop = "var(--safe-area-inset-top, env(safe-area-inset-top, 0px))";
+const insetBottom = "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))";
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { user, isPending } = useCurrentUserState();
+  // The keyboard covers a third of a small phone; the tab bar would just be in
+  // the way (and tappable over the wrong field) while it is up.
+  const keyboardOpen = useUiState((s) => s.keyboardOpen);
 
   if (isPending) {
     return (
@@ -82,20 +96,34 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="md:pl-60">
-        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-bg/90 px-4 py-3 backdrop-blur-sm md:hidden">
-          <Brand />
-          {isPending ? (
-            <div className="size-9 animate-pulse rounded-full bg-paper" />
-          ) : (
-            <UserButton />
-          )}
+        <header
+          className="sticky top-0 z-10 border-b border-border bg-bg/90 backdrop-blur-sm md:hidden"
+          style={{ paddingTop: insetTop }}
+        >
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <Brand />
+            {isPending ? (
+              <div className="size-9 animate-pulse rounded-full bg-paper" />
+            ) : (
+              <UserButton />
+            )}
+          </div>
+          <OfflineBanner />
         </header>
         <main className="mx-auto w-full max-w-3xl px-4 pb-28 pt-4 md:max-w-5xl md:pb-10 md:pt-8">
           {children}
         </main>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-surface/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-sm md:hidden">
+      <nav
+        className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-surface/95 px-2 pt-2 backdrop-blur-sm md:hidden"
+        style={{
+          paddingBottom: `max(0.5rem, ${insetBottom})`,
+          // Hidden (not just dimmed) while the keyboard is up.
+          display: keyboardOpen ? "none" : undefined,
+        }}
+        aria-hidden={keyboardOpen || undefined}
+      >
         <ul className="grid grid-cols-5 items-end">
           {tabs.map((tab) => {
             const active = isActive(pathname, tab);
@@ -171,10 +199,7 @@ function SideLink({
   );
 }
 
-function isActive(
-  pathname: string,
-  tab: { to: string; exact: boolean },
-) {
+function isActive(pathname: string, tab: { to: string; exact: boolean }) {
   if (tab.exact) return pathname === "/";
   if (tab.to === "/more") {
     return (

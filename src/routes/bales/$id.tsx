@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { ArrowLeft, Plus, Shirt } from "lucide-react";
 import { ClothPhoto } from "@/components/cloth-photo";
+import { ErrorState } from "@/components/error-state";
 import { Empty } from "@/components/empty";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,11 +13,20 @@ export const Route = createFileRoute("/bales/$id")({ component: BaleDetail });
 
 function BaleDetail() {
   const { id } = Route.useParams();
-  const { data, isPending } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["bale", id],
     queryFn: () => getBale({ data: { id } }),
   });
 
+  if (isError) {
+    return (
+      <ErrorState
+        title="Could not open this bale"
+        message={error instanceof Error ? error.message : null}
+        onRetry={() => void refetch()}
+      />
+    );
+  }
   if (isPending) return <div className="h-64 animate-pulse rounded-3xl bg-paper" />;
   const bale = data?.bale;
   if (!bale) {

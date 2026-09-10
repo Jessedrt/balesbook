@@ -278,7 +278,10 @@ function tokenIdentityKey(token: string): string {
             .digest("base64url");
         }
       }
-    } catch {}
+    } catch {
+      // An unreadable or unexpected token shape just falls through to the
+      // generic hash below — there is nothing to recover from here.
+    }
   }
   return createHash("sha256").update(token).digest("base64url");
 }
